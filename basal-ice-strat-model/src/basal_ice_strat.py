@@ -17,11 +17,15 @@ class IceColumn:
         None
 
     '''
+
     def __init__(self):
+        ''' Initialize the IceColumn with ...'''
         pass
 
 
 class IceLayer:
+    '''Data structure for one ice layer.'''
 
     def __init__(self):
+        ''' Initialize the IceLayer with ...'''
         pass
