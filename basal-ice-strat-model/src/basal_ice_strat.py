@@ -20,12 +20,24 @@ class Stratigrapher:
 
     '''
 
-    def __init__(self):
-        '''Initialize the Stratigrapher with fields from an ice dynamics model.'''
-        pass
+    def __init__(self, mesh, initial_x: float, initial_y: float, sliding_velocity, ice_thickness,
+                 effective_pressure, till_depth, geothermal_flux, conductive_flux):
+        '''Initialize the Stratigrapher with input fields from coupled models.'''
 
-    def erode(self):
-        '''Calculate subglacial erosion beneath the ice mass.'''
+        self.mesh = mesh
+        self.sliding_velocity = sliding_velocity
+        self.ice_thickness = ice_thickness
+        self.effective_pressure = effective_pressure
+        self.till_depth = till_depth
+        self.geothermal_flux = geothermal_flux
+        self.conductive_flux = conductive_flux
+
+        # Simulation variables
+        self.ice_column = IceColumn(initial_x, initial_y, sliding_velocity, ice_thickness)
+        self.time_elapsed = 0.0
+
+    def get_attr(self):
+        '''Get the value of a field variable at the IceColumn location.'''
         pass
 
     def melt(self):
