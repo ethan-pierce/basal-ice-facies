@@ -36,21 +36,35 @@ class Stratigrapher:
         self.ice_column = IceColumn(initial_x, initial_y, sliding_velocity, ice_thickness)
         self.time_elapsed = 0.0
 
-    def get_attr(self):
-        '''Get the value of a field variable at the IceColumn location.'''
-        pass
+    def get_attr(self, field):
+        '''Returns the value of a field variable at the IceColumn location.'''
 
-    def melt(self):
+        return field.at(self.ice_column.loc['x'], self.ice_column.loc['y'])
+
+    def melt(self, total_melt: float):
         '''Melt the lowest layer(s) of the IceColumn.'''
-        pass
 
-    def freeze(self):
-        '''Freeze on a new layer at the base of the IceColumn.'''
-        pass
+        to_melt = total_melt
+
+        while to_melt >= self.ice_column.layers[-1].height:
+            to_melt -= self.ice_column.layers[-1].height
+            self.ice_column.rm_layer(-1)
+
+            if len(self.ice_column.layers) == 0:
+                break
+
+        if to_melt >= 0:
+            self.ice_column.layers[-1].height -= to_melt
+            to_melt = 0.0
 
     def regeler(self):
         '''Entrain a new layer of sediment via regelation.'''
-        pass
+
+        N = self.get_attr(self.effective_pressure)
+
+        if N > 0.01:
+            
+
 
     def evolve_fringe(self):
         '''Update the state of the frozen fringe beneath the ice mass.'''
