@@ -36,6 +36,9 @@ class Stratigrapher:
         self.ice_column = IceColumn(initial_x, initial_y, sliding_velocity, ice_thickness)
         self.time_elapsed = 0.0
 
+        # Constants
+        self.array_conductivity = 2e-15 * 1e6 * 3.14e7 # m^2 MPa^-1 a^-1
+
     def get_attr(self, field):
         '''Returns the value of a field variable at the IceColumn location.'''
 
@@ -57,28 +60,22 @@ class Stratigrapher:
             self.ice_column.layers[-1].height -= to_melt
             to_melt = 0.0
 
-    def regeler(self):
+    def regeler(self, dt: float):
         '''Entrain a new layer of sediment via regelation.'''
 
         N = self.get_attr(self.effective_pressure)
+        depth = self.ice_column.height
+        regelation_rate = self.array_conductivity * (N / depth)
 
-        if N > 0.01:
-            
-
-
-    def evolve_fringe(self):
-        '''Update the state of the frozen fringe beneath the ice mass.'''
-        pass
-
-    def update_thermal_state(self):
-        '''Update the thermal state at the base of the ice mass.'''
-        pass
+        if self.ice_column.layers[-1].process == 'regelation':
+            self.ice_column.layers[-1].height += regelation_rate * dt
+        else:
+            new_layer = IceLayer(regelation_rate * dt, 0.05, process = 'regelation')
+            self.ice_column.add_layer(new_layer)
 
     def update(self, dt):
         '''Simulate the evolution of the IceColumn over one time step.'''
         pass
-
-
 
 class IceColumn:
     '''Data structure for one column of ice.
@@ -123,12 +120,6 @@ class IceColumn:
         self.height -= self.layers[idx].height
         del self.layers[idx]
 
-    def update_layer(self, idx, **kwargs):
-        '''Change the attributes of a layer.'''
-
-        for key, val in kwargs:
-            setattr(self.layers[idx], key, val)
-
     def update_field_vars(self):
         '''Interpolate to find the velocity, divergence, and total height at the current location.'''
 
@@ -158,7 +149,7 @@ class IceColumn:
 
         for idx in range(len(self.layers)):
             new_h = self.layers[idx].height * ratio
-            self.update_layer(idx, height = new_h)
+            self.layers[idx].mutate(new_h)
 
     def update(self, dt):
         '''Run one time step, advect the column, and update layer heights.'''
@@ -169,23 +160,22 @@ class IceColumn:
         self.update_height(dt)
         self.time_elapsed += dt
 
-
-
 class IceLayer:
     '''Data structure for one ice layer.'''
 
     def __init__(self, height: float, concentration: float,
-                 angularity = None, grainsize = None):
+                 angularity = None, grainsize = None, process: string = None):
         '''Initialize the IceLayer with a height and sediment profile.'''
 
         self.height = height # meters
         self.concentration = concentration # % by vol.
         self.angularity = angularity # 0-1
         self.grainsize = grainsize # distribution or Dx metric
+        self.process = process # string
 
-    def mutate(self, delta_h):
+    def mutate(self, new_height: float):
         '''Change the height of the IceLayer by delta_h.'''
 
-        ratio = self.height / (self.height + delta_h)
+        ratio = self.height / new_height
         self.concentration = self.concentration / ratio
-        self.height += delta_h
+        self.height = new_height
