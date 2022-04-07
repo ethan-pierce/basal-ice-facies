@@ -77,6 +77,7 @@ class EnthalpyFlowbandState:
         self.temperature = empty
         self.porosity = empty
         self.effective_pressure = empty
+        self.water_flux = empty
 
     def set_initial_surface(self, surface_function: Callable[np.ndarray, np.ndarray]):
         '''Set surface height and create a boolean mask of the glacier.'''
@@ -187,12 +188,44 @@ class EnthalpyFlowbandState:
 
         self.temperature = np.where(self.in_glacier, initial_temperature, 0)
         self.porosity = np.zeros_like(self.temperature)
+        self.water_flux = np.zeros_like(self.temperature)
+        self.effective_pressure = self.hydrostatic_pressure.copy()
         self.calc_enthalpy()
         self.partition_domain()
 
 class EnthalpyFlowbandModel:
+    '''Models the time evolution of enthalpy along a glacier flowband.
 
-    def __init__(self):
+    Uses a compaction-pressure drainage model as a closure term in the temperate part of the domain.
+    See Hewitt and Schoof (2017) for a detailed description of the algorithm.
+
+    Attributes:
+        None
+    '''
+
+    def __init__(self, state: EnthalpyFlowbandState):
+        '''Initialize the enthalpy model with a state handler.'''
+
+        self.state = state
+        self.time = self.state.time_array
+        self.time_elapsed = 0.0
+
+        empty_vector = np.empty(self.state.grid.number_of_nodes)
+        empty_matrix = np.empty((self.state.grid.number_of_nodes, self.state.grid.number_of_nodes))
+
+        self.enthalpy_matrix = empty_matrix
+        self.enthalpy_forcing = empty_vector
+        self.enthalpy_update = empty_vector
+
+        self.pressure_matrix = empty_matrix
+        self.pressure_forcing = empty_vector
+        self.pressure_update = empty_vector
+
+        self.temperature_update = empty_vector
+        self.porosity_update = empty_vector
+        self.drainage_update = empty_vector
+
+    def assemble_enthalpy_forcing(self):
         pass
 
     def assemble_enthalpy_matrix(self):
@@ -205,6 +238,9 @@ class EnthalpyFlowbandModel:
         pass
 
     def advance_enthalpy(self):
+        pass
+
+    def assemble_pressure_forcing(self):
         pass
 
     def assemble_pressure_matrix(self):
