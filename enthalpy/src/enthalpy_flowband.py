@@ -23,6 +23,9 @@ class EnthalpyFlowbandState:
         pressure_ref: reference pressure for Clapeyron equation
         glens_coeff: ice fluidity coefficient in Glen's flow law
         glens_n: exponent in Glen's flow law
+        drainage_exponent: exponent on porosity in the compaction-pressure model (Hewitt and Schoof, 2017)
+        drainage_coeff: coefficient for the compaction-pressure model (Hewitt and Schoof, 2017)
+        water_viscosity: viscosity of water
     '''
 
     rho_ice = 917 # kg m^-3
@@ -36,6 +39,9 @@ class EnthalpyFlowbandState:
     pressure_ref = 612 # Pa
     glens_coeff = 2.4e-24 # Pa^-3 s^-1
     glens_n = 3
+    drainage_exponent = 2
+    drainage_coeff = 1e-12 #m^2
+    water_viscosity = 1.8e-3 # Pa s
 
     def __init__(self, nx: int, nz: int, dx: float, dz: float, t_final: float, dt: float):
         '''Initializes the model domain with dimensions and grid resolution.'''
@@ -65,6 +71,7 @@ class EnthalpyFlowbandState:
 
         # Call self.calculate_internal_energy() to populate these fields
         self.strain_rate = np.empty((4, self.grid.number_of_nodes))
+        self.effective_viscosity = empty
         self.deviatoric_stress = np.empty((4, self.grid.number_of_nodes))
         self.internal_energy = empty
 
@@ -89,9 +96,6 @@ class EnthalpyFlowbandState:
                 self.in_glacier[node] = 1
             else:
                 self.in_glacier[node] = 0
-
-        # Close nodes outside the glacier
-        self.grid.set_nodata_nodes_to_closed(self.in_glacier, 0)
 
     def set_pressure_melting_point(self):
         '''Compute the pressure-melting-point of ice throughout the domain.'''
@@ -147,10 +151,11 @@ class EnthalpyFlowbandState:
         effective_strain = np.sqrt(0.5 * (self.strain_rate[0]**2 + self.strain_rate[1]**2
                                    + self.strain_rate[2]**2 + self.strain_rate[3]**2))
 
+        self.effective_viscosity = (self.glens_coeff**(-1 / self.glens_n) *
+                                    effective_strain**(1 / (self.glens_n - 1)))
+
         for i in range(4):
-            self.deviatoric_stress[i] = (self.glens_coeff**(-1 / self.glens_n) *
-                                         effective_strain**(1 / (self.glens_n - 1)) *
-                                         self.strain_rate[i])
+            self.deviatoric_stress[i] = self.effective_viscosity * self.strain_rate[i]
 
         self.internal_energy = np.sum([self.strain_rate[i] * self.deviatoric_stress[i]
                                        for i in range(4)], axis = 0)
@@ -178,7 +183,7 @@ class EnthalpyFlowbandState:
         self.porosity = np.where(self.is_temperate, porosity_if_temperate, 0)
 
     def calc_enthalpy(self):
-        '''Calculate the enthalpy field for the glacier, given temperature and porosity'''
+        '''Calculate the enthalpy field for the glacier, given temperature and porosity.'''
 
         self.enthalpy = (self.rho_ice * self.heat_capacity * (self.temperature - self.temperature_ref)
                          + self.rho_water * self.latent_heat * self.porosity)
@@ -193,11 +198,12 @@ class EnthalpyFlowbandState:
         self.calc_enthalpy()
         self.partition_domain()
 
-class EnthalpyFlowbandModel:
+class EnthalpyFlowbandExplicit:
     '''Models the time evolution of enthalpy along a glacier flowband.
 
     Uses a compaction-pressure drainage model as a closure term in the temperate part of the domain.
-    See Hewitt and Schoof (2017) for a detailed description of the algorithm.
+    See Hewitt and Schoof (2017) for a detailed description of the algorithm. Uses central finite
+    differences in space and a forward Euler discretization in time, subject to a CFL condition.
 
     Attributes:
         None
@@ -208,55 +214,126 @@ class EnthalpyFlowbandModel:
 
         self.state = state
         self.time = self.state.time_array
+        self.time_step = 0.0
         self.time_elapsed = 0.0
+        self.iter_nodes = np.ravel(self.state.grid.nodes)
+        empty = np.empty(self.state.grid.number_of_nodes)
 
-        empty_vector = np.empty(self.state.grid.number_of_nodes)
-        empty_matrix = np.empty((self.state.grid.number_of_nodes, self.state.grid.number_of_nodes))
+        # Arrays for boundary conditions
+        self.top_boundary = None
+        self.bottom_boundary = None
+        self.outflow_boundary = None
+        self.inflow_boundary = None
 
-        self.enthalpy_matrix = empty_matrix
-        self.enthalpy_forcing = empty_vector
-        self.enthalpy_update = empty_vector
+        # Components of the enthalpy equation
+        self.advection = empty
+        self.diffusion = empty
+        self.water_flux = empty
 
-        self.pressure_matrix = empty_matrix
-        self.pressure_forcing = empty_vector
-        self.pressure_update = empty_vector
+        # Update variable fields
+        self.new_enthalpy = empty
+        self.new_temperature = empty
+        self.new_porosity = empty
+        self.new_pressure = empty
 
-        self.temperature_update = empty_vector
-        self.porosity_update = empty_vector
-        self.drainage_update = empty_vector
+    def calc_dx(self, field: str) -> np.ndarray:
+        '''Estimate the x-derivative of a given field.'''
 
-    def assemble_enthalpy_forcing(self):
+        if isinstance(field, str) == True:
+            try:
+                field_array = getattr(self.state, field)
+            except:
+                raise AttributeError('EnthalpyFlowbandState has no field named ' + str(field))
+        else:
+            field_array = field
+
+        field_diff = self.state.grid.calc_diff_at_link(field_array)
+        field_dx = self.state.grid.map_mean_of_horizontal_active_links_to_node(field_diff)
+
+        return field_dx
+
+    def calc_dz(self, field: str) -> np.ndarray:
+        '''Estimate the y-derivative of a given field.'''
+
+        if isinstance(field, str) == True:
+            try:
+                field_array = getattr(self.state, field)
+            except:
+                raise AttributeError('EnthalpyFlowbandState has no field named ' + str(field))
+        else:
+            field_array = field
+
+        field_diff = self.state.grid.calc_diff_at_link(field_array)
+        field_dz = self.state.grid.map_mean_of_vertical_active_links_to_node(field_diff)
+
+        return field_dz
+
+    def identify_boundaries(self, surface_function: Callable[np.ndarray, np.ndarray]):
+        '''Identify node ID's for nodes nearest to each boundary.'''
+
+        x_coords = self.state.grid.node_x[0:self.state.nx]
+        z_coords = np.arange(0, self.state.nz + self.state.dz, self.state.dz)
+        surface = surface_function(x_coords)
+
+        self.top_boundary = self.state.grid.find_nearest_node((x_coords, surface), mode = 'clip')
+        self.bottom_boundary = self.state.grid.find_nearest_node((x_coords, 0), mode = 'clip')
+        self.inflow_boundary = self.state.grid.find_nearest_node((0, z_coords), mode = 'clip')
+        self.outflow_boundary = self.state.grid.find_nearest_node((np.max(x_coords), z_coords), mode = 'clip')
+
+    def compute_advection(self):
+        '''Compute the advective terms in the enthalpy equation.'''
+
+        enthalpy_dx = self.calc_dx('enthalpy')
+        enthalpy_dz = self.calc_dz('enthalpy')
+        advection_x = self.state.velocity_x * enthalpy_dx
+        advection_y = self.state_velocity_z * enthalpy_dz
+        self.advection = advection_x + advection_y
+
+    def compute_diffusion(self):
+        '''Compute the diffusive term in the enthalpy equation.'''
+
+        temperature_dz = self.calc_dz('temperature')
+        diffusive_flux = self.state.conductivity * self.calc_dz(temperature_dz)
+        self.diffusion = diffusive_flux
+
+    def compute_water_flux(self):
+        '''Compute the drainage term in the enthalpy equation.'''
+
+        flux_coeff = self.state.rho_water * self.state.latent_heat
+        water_flux_coeff = ((self.state.drainage_coeff *
+                             self.state.porosity**self.state.drainage_exponent) /
+                             self.state.water_viscosity)
+        pressure_dz = self.calc_dz('effective_pressure')
+        water_flux_array = water_flux_coeff * ((self.state.rho_water - self.state.rho_ice) *
+                                                state.gravity + pressure_dz)
+        self.water_flux = water_flux_array
+
+    def enforce_enthalpy_BCs(self):
+        '''Enforce boundary conditions on enthalpy along each boundary of the domain.'''
+
         pass
 
-    def assemble_enthalpy_matrix(self):
+
+    def enforce_pressure_BCs(self):
+        '''Enforce boundary conditions on pressure along each boundary of the domain.'''
         pass
 
-    def apply_enthalpy_boundary_conditions(self):
+    def update_compaction_pressure(self):
+        '''Run the inner iteration for water flux, using a compaction-pressure model.'''
         pass
 
-    def solve_enthalpy_system(self):
+    def set_time_step(self):
+        '''Set the appropriate time step based on a modified CFL condition.'''
         pass
 
-    def advance_enthalpy(self):
+    def update_state(self):
+        '''Update the state handler based on the enthalpy field calculated for the next time step.'''
         pass
 
-    def assemble_pressure_forcing(self):
+    def run_one_step(self):
+        '''Advance the model state by one time step.'''
         pass
 
-    def assemble_pressure_matrix(self):
-        pass
-
-    def apply_pressure_boundary_conditions(self):
-        pass
-
-    def solve_pressure_system(self):
-        pass
-
-    def advance_pressure(self):
-        pass
-
-    def advance_drainage_system(self):
-        pass
-
-    def run_until(self, t_final: float):
+    def run_all_steps(self):
+        '''Advance the model through all of the time steps in state.time_array.'''
         pass
