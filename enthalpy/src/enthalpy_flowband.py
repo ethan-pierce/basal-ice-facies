@@ -1,6 +1,16 @@
 import numpy as np
 from landlab import RasterModelGrid
 from typing import Callable
+from dataclasses import dataclass
+
+@dataclass
+class BoundaryCondition:
+    '''Class for holding boundary conditions for a specified field variable.'''
+    field: str
+    left_boundary: np.ndarray = np.empty()
+    right_boundary: np.ndarray = np.empty()
+    top_boundary: np.ndarray = np.empty()
+    bottom_boundary: np.ndarray = np.empty()
 
 class EnthalpyFlowbandState:
     '''Stores all state variables and calculates diagnostic quantities.
@@ -173,6 +183,9 @@ class EnthalpyFlowbandState:
                                     self.temperature_ref + self.enthalpy /
                                     (self.rho_ice * self.heat_capacity))
 
+        # Ensure that the temperature stays below the pressure-melting-point
+        self.temperature = np.where(self.temperature > self.melt_point, self.melt_point, self.temperature)
+
     def calc_porosity(self):
         '''Calculate the porosity field for the glacier, given enthalpy.'''
 
@@ -209,14 +222,16 @@ class EnthalpyFlowbandExplicit:
         None
     '''
 
-    def __init__(self, state: EnthalpyFlowbandState):
+    def __init__(self, state: EnthalpyFlowbandState, CFL: float,
+                       temperature_bc: BoundaryCondition,
+                       porosity_bc: BoundaryCondition):
         '''Initialize the enthalpy model with a state handler.'''
 
         self.state = state
         self.time = self.state.time_array
         self.time_step = 0.0
         self.time_elapsed = 0.0
-        self.iter_nodes = np.ravel(self.state.grid.nodes)
+        self.CFL = CFL
         empty = np.empty(self.state.grid.number_of_nodes)
 
         # Arrays for boundary conditions
@@ -225,16 +240,15 @@ class EnthalpyFlowbandExplicit:
         self.outflow_boundary = None
         self.inflow_boundary = None
 
+        # Boundary conditions
+        self.temperature_bc = temperature_bc
+        self.porosity_bc = porosity_bc
+
         # Components of the enthalpy equation
         self.advection = empty
         self.diffusion = empty
         self.water_flux = empty
-
-        # Update variable fields
-        self.new_enthalpy = empty
-        self.new_temperature = empty
-        self.new_porosity = empty
-        self.new_pressure = empty
+        self.enthalpy_slope = empty
 
     def calc_dx(self, field: str) -> np.ndarray:
         '''Estimate the x-derivative of a given field.'''
@@ -252,7 +266,7 @@ class EnthalpyFlowbandExplicit:
 
         return field_dx
 
-    def calc_dz(self, field: str) -> np.ndarray:
+    def calc_dz(self, field) -> np.ndarray:
         '''Estimate the y-derivative of a given field.'''
 
         if isinstance(field, str) == True:
@@ -277,8 +291,8 @@ class EnthalpyFlowbandExplicit:
 
         self.top_boundary = self.state.grid.find_nearest_node((x_coords, surface), mode = 'clip')
         self.bottom_boundary = self.state.grid.find_nearest_node((x_coords, 0), mode = 'clip')
-        self.inflow_boundary = self.state.grid.find_nearest_node((0, z_coords), mode = 'clip')
-        self.outflow_boundary = self.state.grid.find_nearest_node((np.max(x_coords), z_coords), mode = 'clip')
+        self.left_boundary = self.state.grid.find_nearest_node((0, z_coords), mode = 'clip')
+        self.right_boundary = self.state.grid.find_nearest_node((np.max(x_coords), z_coords), mode = 'clip')
 
     def compute_advection(self):
         '''Compute the advective terms in the enthalpy equation.'''
@@ -296,6 +310,32 @@ class EnthalpyFlowbandExplicit:
         diffusive_flux = self.state.conductivity * self.calc_dz(temperature_dz)
         self.diffusion = diffusive_flux
 
+    def update_compaction_pressure(self):
+        '''Run the inner compaction-pressure model to solve for water flux and effective pressure.'''
+
+        baseline_pressure = self.state.effective_pressure.copy()
+
+        # Enforce effective pressure = 0 at the surface
+        for node in self.top_boundary:
+            baseline_pressure[node] = 0.0
+
+        pressure_gradient = self.calc_dz(baseline_pressure)
+
+        # Enforce d(effective pressure) / dz = 0 at the base
+        for node in self.bottom_boundary:
+            pressure_gradient[node] = 0.0
+
+        inner_function = ((self.state.rho_water - self.state.rho_ice) * self.state.gravity +
+                          pressure_gradient)
+        laplacian = self.calc_dz(inner_function)
+        diffusivity = self.state.effective_viscosity * self.state.drainage_coeff / self.state.water_viscosity
+
+        compaction_pressure = diffusivity * laplacian
+
+        self.state.effective_pressure = np.where(self.state.porosity > 0,
+                                                 compaction_pressure / self.state.porosity,
+                                                 self.state.hydrostatic_pressure)
+
     def compute_water_flux(self):
         '''Compute the drainage term in the enthalpy equation.'''
 
@@ -309,31 +349,65 @@ class EnthalpyFlowbandExplicit:
         self.water_flux = water_flux_array
 
     def enforce_enthalpy_BCs(self):
-        '''Enforce boundary conditions on enthalpy along each boundary of the domain.'''
+        '''Calculate Dirichlet boundary conditions on enthalpy from temperature and porosity.'''
 
-        pass
+        def pointwise_enthalpy(temperature, porosity):
+            temperature_component = (self.state.rho_ice * self.state.heat_capacity *
+                                     (temperature - self.state.temperature_ref))
+            porosity_component = self.state.rho_water * self.state.latent_heat * porosity
+            enthalpy = temperature_component + porosity_component
+            return enthalpy
 
+        for edge in ['inflow', 'outflow', 'top', 'bottom']:
+            temperature_condition = getattr(self.temperature_bc, edge + '_boundary')
+            porosity_condition = getattr(self.porosity_bc, edge + '_boundary')
 
-    def enforce_pressure_BCs(self):
-        '''Enforce boundary conditions on pressure along each boundary of the domain.'''
-        pass
+            for node in getattr(self, edge + '_boundary'):
+                self.state.enthalpy[node] = pointwise_enthalpy(temperature_condition[node],
+                                                               porosity_condition[node])
 
-    def update_compaction_pressure(self):
-        '''Run the inner iteration for water flux, using a compaction-pressure model.'''
-        pass
+    def update_enthalpy_slope(self):
+        '''Update the first time derivative of the enthalpy field.'''
+
+        self.enforce_enthalpy_BCs()
+        self.compute_advection()
+        self.compute_diffusion()
+        self.update_compaction_pressure()
+        self.compute_water_flux()
+
+        self.enthalpy_slope = (self.state.internal_energy + self.diffusion -
+                               self.advection - self.water_flux)
 
     def set_time_step(self):
         '''Set the appropriate time step based on a modified CFL condition.'''
-        pass
+
+        self.time_step = (self.CFL * self.state.dx * self.state.dz) / np.max(self.enthalpy_slope)
 
     def update_state(self):
         '''Update the state handler based on the enthalpy field calculated for the next time step.'''
-        pass
 
-    def run_one_step(self):
+        self.set_time_step()
+        self.state.enthalpy = self.enthalpy_slope * self.time_step
+        self.time_elapsed += self.time_step
+
+    def run_one_step(self, stop_time_index: int):
         '''Advance the model state by one time step.'''
-        pass
 
-    def run_all_steps(self):
+        stop_at_time = self.time_array[stop_time_index]
+
+        while self.time_elapsed < stop_at_time:
+            self.update_enthalpy_slope()
+            self.update_state()
+            self.state.partition_domain()
+            self.state.calc_porosity()
+            self.state.calc_temperature()
+
+    def run_all_steps(self, verbose_at_interval = False):
         '''Advance the model through all of the time steps in state.time_array.'''
-        pass
+
+        for idx in range(len(self.time_array)):
+            self.run_one_step(idx)
+
+            if verbose_at_interval:
+                if idx % verbose_at_interval == 0:
+                    print('Time elapsed: ' + str(np.round(self.time_elapsed / 86400, 2)) + ' days.')
