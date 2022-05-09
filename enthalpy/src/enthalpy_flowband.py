@@ -7,10 +7,10 @@ from dataclasses import dataclass
 class BoundaryCondition:
     '''Class for holding boundary conditions for a specified field variable.'''
     field: str
-    left_boundary: np.ndarray = np.empty()
-    right_boundary: np.ndarray = np.empty()
-    top_boundary: np.ndarray = np.empty()
-    bottom_boundary: np.ndarray = np.empty()
+    inflow_boundary: np.ndarray
+    outflow_boundary: np.ndarray
+    top_boundary: np.ndarray
+    bottom_boundary: np.ndarray
 
 class EnthalpyFlowbandState:
     '''Stores all state variables and calculates diagnostic quantities.
@@ -228,9 +228,10 @@ class EnthalpyFlowbandExplicit:
         '''Initialize the enthalpy model with a state handler.'''
 
         self.state = state
-        self.time = self.state.time_array
+        self.time_array = self.state.time_array
         self.time_step = 0.0
         self.time_elapsed = 0.0
+        self.past_time_steps = []
         self.CFL = CFL
         empty = np.empty(self.state.grid.number_of_nodes)
 
@@ -239,6 +240,11 @@ class EnthalpyFlowbandExplicit:
         self.bottom_boundary = None
         self.outflow_boundary = None
         self.inflow_boundary = None
+
+        self.top_bc = None
+        self.bottom_bc = None
+        self.outflow_bc = None
+        self.inflow_bc = None
 
         # Boundary conditions
         self.temperature_bc = temperature_bc
@@ -249,6 +255,12 @@ class EnthalpyFlowbandExplicit:
         self.diffusion = empty
         self.water_flux = empty
         self.enthalpy_slope = empty
+
+    def knit(self, node: int) -> tuple[float, float]:
+        '''Identify the row and column of a node, given the node ID.'''
+
+        coords = np.column_stack(np.where(self.state.grid.nodes == node))[0]
+        return coords
 
     def calc_dx(self, field: str) -> np.ndarray:
         '''Estimate the x-derivative of a given field.'''
@@ -261,8 +273,8 @@ class EnthalpyFlowbandExplicit:
         else:
             field_array = field
 
-        field_diff = self.state.grid.calc_diff_at_link(field_array)
-        field_dx = self.state.grid.map_mean_of_horizontal_active_links_to_node(field_diff)
+        field_diff = self.state.grid.calc_grad_at_link(field_array)
+        field_dx = self.state.grid.map_mean_of_horizontal_links_to_node(field_diff)
 
         return field_dx
 
@@ -277,10 +289,18 @@ class EnthalpyFlowbandExplicit:
         else:
             field_array = field
 
-        field_diff = self.state.grid.calc_diff_at_link(field_array)
-        field_dz = self.state.grid.map_mean_of_vertical_active_links_to_node(field_diff)
+        field_dz = np.gradient(np.reshape(field, self.state))
 
         return field_dz
+
+    def calc_local_enthalpy(self, temperature, porosity):
+        '''Calculate enthalpy at a point, given temperature and porosity.'''
+
+        temperature_component = (self.state.rho_ice * self.state.heat_capacity *
+                                 (temperature - self.state.temperature_ref))
+        porosity_component = self.state.rho_water * self.state.latent_heat * porosity
+        enthalpy = temperature_component + porosity_component
+        return enthalpy
 
     def identify_boundaries(self, surface_function: Callable[np.ndarray, np.ndarray]):
         '''Identify node ID's for nodes nearest to each boundary.'''
@@ -291,8 +311,8 @@ class EnthalpyFlowbandExplicit:
 
         self.top_boundary = self.state.grid.find_nearest_node((x_coords, surface), mode = 'clip')
         self.bottom_boundary = self.state.grid.find_nearest_node((x_coords, 0), mode = 'clip')
-        self.left_boundary = self.state.grid.find_nearest_node((0, z_coords), mode = 'clip')
-        self.right_boundary = self.state.grid.find_nearest_node((np.max(x_coords), z_coords), mode = 'clip')
+        self.inflow_boundary = self.state.grid.find_nearest_node((0, z_coords), mode = 'clip')
+        self.outflow_boundary = self.state.grid.find_nearest_node((np.max(x_coords), z_coords), mode = 'clip')
 
     def compute_advection(self):
         '''Compute the advective terms in the enthalpy equation.'''
@@ -300,7 +320,7 @@ class EnthalpyFlowbandExplicit:
         enthalpy_dx = self.calc_dx('enthalpy')
         enthalpy_dz = self.calc_dz('enthalpy')
         advection_x = self.state.velocity_x * enthalpy_dx
-        advection_y = self.state_velocity_z * enthalpy_dz
+        advection_y = self.state.velocity_z * enthalpy_dz
         self.advection = advection_x + advection_y
 
     def compute_diffusion(self):
@@ -332,9 +352,10 @@ class EnthalpyFlowbandExplicit:
 
         compaction_pressure = diffusivity * laplacian
 
-        self.state.effective_pressure = np.where(self.state.porosity > 0,
-                                                 compaction_pressure / self.state.porosity,
-                                                 self.state.hydrostatic_pressure)
+        with np.errstate(divide = 'ignore'):
+            self.state.effective_pressure = np.where(self.state.porosity > 0,
+                                                     compaction_pressure / self.state.porosity,
+                                                     self.state.hydrostatic_pressure)
 
     def compute_water_flux(self):
         '''Compute the drainage term in the enthalpy equation.'''
@@ -345,26 +366,23 @@ class EnthalpyFlowbandExplicit:
                              self.state.water_viscosity)
         pressure_dz = self.calc_dz('effective_pressure')
         water_flux_array = water_flux_coeff * ((self.state.rho_water - self.state.rho_ice) *
-                                                state.gravity + pressure_dz)
+                                                self.state.gravity + pressure_dz)
         self.water_flux = water_flux_array
 
     def enforce_enthalpy_BCs(self):
         '''Calculate Dirichlet boundary conditions on enthalpy from temperature and porosity.'''
 
-        def pointwise_enthalpy(temperature, porosity):
-            temperature_component = (self.state.rho_ice * self.state.heat_capacity *
-                                     (temperature - self.state.temperature_ref))
-            porosity_component = self.state.rho_water * self.state.latent_heat * porosity
-            enthalpy = temperature_component + porosity_component
-            return enthalpy
+        for idx in range(len(self.top_boundary)):
+            self.state.enthalpy[self.top_boundary[idx]] = self.top_bc[idx]
 
-        for edge in ['inflow', 'outflow', 'top', 'bottom']:
-            temperature_condition = getattr(self.temperature_bc, edge + '_boundary')
-            porosity_condition = getattr(self.porosity_bc, edge + '_boundary')
+        for idx in range(len(self.bottom_boundary)):
+            self.state.enthalpy[self.bottom_boundary[idx]] = self.bottom_bc[idx]
 
-            for node in getattr(self, edge + '_boundary'):
-                self.state.enthalpy[node] = pointwise_enthalpy(temperature_condition[node],
-                                                               porosity_condition[node])
+        for idx in range(len(self.inflow_boundary)):
+            self.state.enthalpy[self.inflow_boundary[idx]] = self.inflow_bc[idx]
+
+        for idx in range(len(self.outflow_boundary)):
+            self.state.enthalpy[self.outflow_boundary[idx]] = self.outflow_bc[idx]
 
     def update_enthalpy_slope(self):
         '''Update the first time derivative of the enthalpy field.'''
@@ -382,6 +400,7 @@ class EnthalpyFlowbandExplicit:
         '''Set the appropriate time step based on a modified CFL condition.'''
 
         self.time_step = (self.CFL * self.state.dx * self.state.dz) / np.max(self.enthalpy_slope)
+        self.past_time_steps.append(self.time_step)
 
     def update_state(self):
         '''Update the state handler based on the enthalpy field calculated for the next time step.'''
