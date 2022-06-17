@@ -6,7 +6,7 @@ def test_always_passes():
     '''This test always passes.'''
     assert True
 
-test_config = ''
+test_config = 'test/test_data/example_config.yml'
 
 @pytest.fixture
 def generator():
@@ -15,6 +15,18 @@ def generator():
 class TestFlowbandGenerator:
     '''Test the FlowbandGenerator utility.'''
 
-    def test_input_file_io(self, generator):
-        '''Test initialization with given input files.'''
+    def test_config_file_io(self, generator):
+        '''Test initialization with example configuration files.'''
         assert generator
+
+        for var in ['ice_thickness', 'velocity_x', 'velocity_y']:
+            assert var in generator.variables
+
+        assert generator.template == 'ice_thickness'
+        assert len(generator.shape) == 2
+        assert len(generator.lower_left) == 2
+        assert len(generator.resolution) == 2
+        assert generator.grid.shape == generator.shape
+
+        for var in generator.variables:
+            assert var in generator.grid.at_node.keys()
