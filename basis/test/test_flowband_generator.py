@@ -64,3 +64,8 @@ class TestFlowbandGenerator:
         # for idx in range(len(flowline.distance)):
             # if idx != 0:
                 # assert(flowline.distance[idx] > flowline.distance[idx - 1])
+
+    def test_construct_flowband(self, generator):
+        '''Test flowband construction and x-z mesh generation.'''
+
+        generator.construct_flowband('ice_thickness', 100, 1000)
