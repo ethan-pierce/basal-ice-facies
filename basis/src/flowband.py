@@ -4,6 +4,16 @@ import numpy as np
 import yaml
 import rasterio as rio
 from landlab import RasterModelGrid
+from dataclasses import dataclass
+
+@dataclass
+class Flowline:
+    '''Dataclass stores values of fields along a flowline.'''
+    node_id: np.ndarray
+    node_x: np.ndarray
+    node_y: np.ndarray
+    distance: np.ndarray
+    fields: dict
 
 class FlowbandGenerator:
     '''Class to generate a Lagrangian flowband and populate grid fields at nodes.'''
@@ -50,13 +60,62 @@ class FlowbandGenerator:
         self.init_max = inputs['initial_position']['max_value']
         self.init_condition = ((self.grid.at_node[self.init_field] > self.init_min) &
                               (self.grid.at_node[self.init_field] < self.init_max))
-                              
         self.initial_nodes = np.where(self.init_condition)[0]
 
-    def generate_flowline(self, dt: float, omit: list = []):
-        '''Generate an experimental flowline from a random (valid) starting location.'''
-        pass
+        self.break_nodes = np.where(self.grid.at_node[inputs['break_condition']['field']] <=
+                                    inputs['break_condition']['min_value'])[0]
 
-    def construct_flowband(self):
+    def generate_flowline(self, dt: float, max_iter: int, omit: list = []):
+        '''Generate an experimental flowline from a random (valid) starting location.'''
+
+        node_id = []
+        node_x = []
+        node_y = []
+        distance = []
+        fields = {var: [] for var in self.variables if var not in omit}
+
+        start_node = np.random.choice(self.initial_nodes)
+        origin_x = self.grid.node_x[start_node]
+        origin_y = self.grid.node_y[start_node]
+        current_x = self.grid.node_x[start_node]
+        current_y = self.grid.node_y[start_node]
+
+        node = self.grid.find_nearest_node((current_x, current_y))
+
+        for i in range(max_iter):
+            node_id.append(node)
+            node_x.append(self.grid.node_x[node])
+            node_y.append(self.grid.node_y[node])
+            distance.append(np.sqrt((node_x[-1] - origin_x)**2 + (node_y[-1] - origin_y)**2))
+
+            for var in fields.keys():
+                fields[var].append(self.grid.at_node[var][node])
+
+            current_x += self.grid.at_node['velocity_x'] * (1 / self.resolution[0]) * dt
+            current_y += self.grid.at_node['velocity_y'] * (1 / self.resolution[1]) * dt
+
+            try:
+                node = self.grid.find_nearest_node((current_x, current_y))
+            except:
+                break
+
+            if node in self.break_nodes:
+                break
+
+        flowline = Flowline(node_id = node_id,
+                            node_x = node_x,
+                            node_y = node_y,
+                            distance = distance,
+                            fields = fields)
+
+        return flowline
+
+    def construct_flowband(self, surface: str, dt: float, max_iter: int, omit: list = []):
         '''Construct a flowband from an existing flowline.'''
-        pass
+
+        flowline = self.generate_flowline(dt, max_iter, omit)
+
+        if surface not in flowline.fields.keys():
+            raise ValueError('Missing ' + surface + ' field from flowline.')
+
+        flowband = RasterModelGrid((len(flowline.distance), np.max(flowline.fields[surface]) + 1))

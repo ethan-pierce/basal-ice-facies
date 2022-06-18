@@ -39,3 +39,28 @@ class TestFlowbandGenerator:
         for node in generator.initial_nodes:
             assert generator.grid.at_node[generator.init_field][node] > generator.init_min
             assert generator.grid.at_node[generator.init_field][node] < generator.init_max
+
+    def test_break_nodes(self, generator):
+        '''Test break condition established correctly.'''
+
+        assert len(generator.break_nodes) > 0
+
+        for node in generator.break_nodes:
+            assert generator.grid.at_node['ice_thickness'][node] <= 0
+
+    def test_generate_flowline(self, generator):
+        '''Test flowline generation algorithm.'''
+
+        flowline = generator.generate_flowline(100, 1000)
+
+        assert len(flowline.node_id) == len(flowline.node_x)
+        assert len(flowline.node_id) == len(flowline.node_y)
+        assert len(flowline.node_id) == len(flowline.distance)
+
+        for key in flowline.fields.keys():
+            assert len(flowline.fields[key]) == len(flowline.node_id)
+
+        assert flowline.distance[0] == 0.0
+        # for idx in range(len(flowline.distance)):
+            # if idx != 0:
+                # assert(flowline.distance[idx] > flowline.distance[idx - 1])
