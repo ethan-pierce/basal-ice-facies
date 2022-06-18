@@ -30,3 +30,12 @@ class TestFlowbandGenerator:
 
         for var in generator.variables:
             assert var in generator.grid.at_node.keys()
+
+    def test_starting_locations(self, generator):
+        '''Test starting locations are initialized correctly.'''
+
+        assert len(generator.initial_nodes) > 0
+
+        for node in generator.initial_nodes:
+            assert generator.grid.at_node[generator.init_field][node] > generator.init_min
+            assert generator.grid.at_node[generator.init_field][node] < generator.init_max

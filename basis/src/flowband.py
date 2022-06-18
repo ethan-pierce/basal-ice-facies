@@ -44,3 +44,19 @@ class FlowbandGenerator:
                     raise ValueError('Shape of ' + var + ' is ' + str(data.shape) + ', but should be ' + str(self.shape))
 
                 self.grid.add_field(var, data, at = metadata['at'], units = metadata['units'])
+
+        self.init_field = inputs['initial_position']['field']
+        self.init_min = inputs['initial_position']['min_value']
+        self.init_max = inputs['initial_position']['max_value']
+        self.init_condition = ((self.grid.at_node[self.init_field] > self.init_min) &
+                              (self.grid.at_node[self.init_field] < self.init_max))
+                              
+        self.initial_nodes = np.where(self.init_condition)[0]
+
+    def generate_flowline(self, dt: float, omit: list = []):
+        '''Generate an experimental flowline from a random (valid) starting location.'''
+        pass
+
+    def construct_flowband(self):
+        '''Construct a flowband from an existing flowline.'''
+        pass
