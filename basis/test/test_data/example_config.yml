@@ -1,0 +1,35 @@
+tag: example-simulation
+user: egp
+date: 06-17-2022
+template: ice_thickness
+
+initial_position:
+  field: velocity_y
+  min_value: -200
+  max_value: -100
+
+break_condition:
+  field: ice_thickness
+  min_value: 0
+
+fields:
+  ice_thickness:
+    file: test/test_data/ice_thickness.tif
+    at: node
+    units: meters
+    flip_axes: [0]
+    scale_by: 1
+
+  velocity_x:
+    file: test/test_data/velocity_x.tif
+    at: node
+    units: meters / year
+    flip_axes: [0]
+    scale_by: -1
+
+  velocity_y:
+    file: test/test_data/velocity_y.tif
+    at: node
+    units: meters / year
+    flip_axes: [0]
+    scale_by: 1
