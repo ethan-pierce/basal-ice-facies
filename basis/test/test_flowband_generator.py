@@ -83,3 +83,9 @@ class TestFlowbandGenerator:
         assert len(inside) > 0
         assert len(outside) > 0
         assert len(inside) + len(outside) == mesh.number_of_nodes
+
+        at_surface = np.where(mesh.at_node['at_surface'] == 1)[0]
+        not_surface = np.where(mesh.at_node['at_surface'] == 0)[0]
+        assert len(at_surface) >= mesh.shape[1]
+        assert len(not_surface) > 0
+        assert len(at_surface) + len(not_surface) == mesh.number_of_nodes

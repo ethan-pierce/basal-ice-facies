@@ -133,4 +133,17 @@ class FlowbandGenerator:
             else:
                 flowband.at_node['in_domain'][node] = 0
 
+        flowband.add_zeros('at_surface', at = 'node')
+        adjacent = flowband.active_adjacent_nodes_at_node
+
+        for node in range(flowband.number_of_nodes):
+
+            if flowband.at_node['in_domain'][node] == 1:
+                if adjacent[node][1] == -1:
+                    flowband.at_node['at_surface'][node] = 1
+                else:
+                    flowband.at_node['at_surface'][node] = 0
+            else:
+                flowband.at_node['at_surface'][node] = 0
+
         return flowband
