@@ -1,4 +1,5 @@
 import pytest
+import numpy as np
 
 from src.flowband import FlowbandGenerator
 
@@ -61,11 +62,24 @@ class TestFlowbandGenerator:
             assert len(flowline.fields[key]) == len(flowline.node_id)
 
         assert flowline.distance[0] == 0.0
-        # for idx in range(len(flowline.distance)):
-            # if idx != 0:
-                # assert(flowline.distance[idx] > flowline.distance[idx - 1])
+        for idx in range(len(flowline.distance)):
+            if idx != 0:
+                assert(flowline.distance[idx] >= flowline.distance[idx - 1])
 
     def test_construct_flowband(self, generator):
         '''Test flowband construction and x-z mesh generation.'''
+        np.random.seed(31400000)
 
-        generator.construct_flowband('ice_thickness', 100, 1000)
+        mesh = generator.construct_flowband('ice_thickness', dt = 10, max_iter = 1000, nz = 100)
+
+        assert mesh.shape == (100, 160)
+        assert np.max(mesh.node_y) > np.max(mesh.at_node['ice_thickness'])
+
+        column = np.where(mesh.node_x == mesh.node_x[50])
+        assert np.all(mesh.at_node['ice_thickness'][column] == mesh.at_node['ice_thickness'][column[0]])
+
+        inside = np.where(mesh.at_node['in_domain'] == 1)[0]
+        outside = np.where(mesh.at_node['in_domain'] == 0)[0]
+        assert len(inside) > 0
+        assert len(outside) > 0
+        assert len(inside) + len(outside) == mesh.number_of_nodes

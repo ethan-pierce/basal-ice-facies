@@ -95,7 +95,7 @@ class FlowbandGenerator:
             current_y += self.grid.at_node['velocity_y'] * (1 / self.resolution[1]) * dt
 
             try:
-                node = self.grid.find_nearest_node((current_x, current_y))
+                node = self.grid.find_nearest_node((current_x, current_y))[0]
             except:
                 break
 
@@ -110,7 +110,7 @@ class FlowbandGenerator:
 
         return flowline
 
-    def construct_flowband(self, surface: str, dt: float, max_iter: int, omit: list = []):
+    def construct_flowband(self, surface: str, dt: float, max_iter: int, omit: list = [], nz: int = 25):
         '''Construct a flowband from an existing flowline.'''
 
         flowline = self.generate_flowline(dt, max_iter, omit)
@@ -118,4 +118,19 @@ class FlowbandGenerator:
         if surface not in flowline.fields.keys():
             raise ValueError('Missing ' + surface + ' field from flowline.')
 
-        flowband = RasterModelGrid((len(flowline.distance), np.max(flowline.fields[surface]) + 1))
+        max_z = np.max(flowline.fields[surface])
+        dz = (1.1 * max_z) / nz
+        flowband = RasterModelGrid((nz, len(flowline.distance)), (self.resolution[0], dz))
+
+        for key, val in flowline.fields.items():
+            flowband.add_field(key, np.repeat(val, flowband.shape[0]), at = 'node')
+
+        # For all nodes, check if node z-value is inside the domain
+        flowband.add_zeros('in_domain', at = 'node')
+        for node in np.ravel(flowband.nodes):
+            if flowband.node_y[node] < flowband.at_node[surface][node]:
+                flowband.at_node['in_domain'][node] = 1
+            else:
+                flowband.at_node['in_domain'][node] = 0
+
+        return flowband

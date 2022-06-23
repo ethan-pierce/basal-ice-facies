@@ -6,7 +6,7 @@ template: ice_thickness
 initial_position:
   field: velocity_y
   min_value: -200
-  max_value: -100
+  max_value: -120
 
 break_condition:
   field: ice_thickness
