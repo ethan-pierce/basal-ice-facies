@@ -31,6 +31,7 @@ class FlowbandGenerator:
         self.variables = inputs['fields'].keys()
         self.grid = None
 
+        # Construct the grid based on the geometry of the template field
         with rio.open(inputs['fields'][self.template]['file']) as file:
             self.crs = file.crs
             self.shape = file.read(1).shape
@@ -41,6 +42,7 @@ class FlowbandGenerator:
         if self.grid is None:
             raise AttributeError('No template file specified, could not create RasterModelGrid.')
 
+        # Add fields to the grid
         for var in self.variables:
             metadata = inputs['fields'][var]
 
@@ -55,6 +57,7 @@ class FlowbandGenerator:
 
                 self.grid.add_field(var, data, at = metadata['at'], units = metadata['units'])
 
+        # Given a boolean condition on a field (e.g., velocity), establish valid starting locations
         self.init_field = inputs['initial_position']['field']
         self.init_min = inputs['initial_position']['min_value']
         self.init_max = inputs['initial_position']['max_value']
