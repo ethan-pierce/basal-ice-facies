@@ -2,6 +2,7 @@
 
 import pytest
 import numpy as np
+from numpy.testing import assert_array_equal, assert_array_almost_equal
 from landlab import RasterModelGrid
 
 from src.basal_ice_stratigrapher import BasalIceStratigrapher
@@ -10,26 +11,32 @@ def test_always_passes():
     """This test always passes."""
     assert True
 
-test_config = 'test/test_data/basis_test_config.yml'
+config = 'test/test_data/input_file.toml'
 
-@pytest.fixture
-def rmg():
-    """Creates a RasterModelGrid object for testing purposes."""
-    shape = (4, 4)
-    spacing = 1000.
+def test_initialize():
+    """Test model initialization routines."""
+    basis = BasalIceStratigrapher(config)
 
-    rmg = RasterModelGrid(shape, spacing)
+    assert basis.grid.number_of_nodes == 16
+    assert basis.parameters['erosion_coefficient'] == 4e-4
+    assert 'soil__depth' in basis.grid.at_node.keys()
 
-    h = rmg.add_field('glacier__thickness', np.full(shape, 100.), at = 'node')
-    u = rmg.add_field('glacier__sliding_velocity', np.full(rmg.number_of_links, 50.), at = 'link')
-    N = rmg.add_field('glacier__effective_pressure', np.full(shape, 1e5), at = 'node')
-    qb = rmg.add_field('bedrock__geothermal_heat_flux', np.full(shape, 0.6), at = 'node')
+def test_calc_erosion_rate():
+    """Test the erosion rate calculation."""
+    basis = BasalIceStratigrapher(config)
+    basis.calc_erosion_rate()
 
-    # Tilt the glacier
-    h += rmg.node_x * 5
+    assert_array_equal(basis.grid.at_node['erosion__rate'], [4e-2, 4e-2, 4e-2, 4e-2,
+                                                             4e-2, 4e-2, 4e-2, 4e-2,
+                                                             4e-2, 4e-2, 4e-2, 4e-2,
+                                                             4e-2, 4e-2, 4e-2, 4e-2])
 
-    return rmg
+def test_calc_melt_rate():
+    """Test the melt rate calculation."""
+    basis = BasalIceStratigrapher(config)
+    basis.calc_melt_rate()
 
-def test_initialize(rmg):
-    """Tests model initialization routines."""
-    basis = BasalIceStratigrapher(rmg)
+    assert_array_almost_equal(basis.grid.at_node['subglacial_melt__rate'], [0.01959, 0.01959, 0.01959, 0.01959,
+                                                                            0.01959, 0.01959, 0.01959, 0.01959,
+                                                                            0.01959, 0.01959, 0.01959, 0.01959,
+                                                                            0.01959, 0.01959, 0.01959, 0.01959])

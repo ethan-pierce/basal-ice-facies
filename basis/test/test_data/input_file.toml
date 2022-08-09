@@ -1,0 +1,32 @@
+name = 'tests'
+
+[grid]
+shape = [4, 4]
+spacing = 10.0
+
+[parameters]
+erosion_coefficient = 4e-4
+erosion_exponent = 1
+ice_latent_heat = 3.34e5
+ice_density = 917
+friction_coefficient = 0.6
+geothermal_heat_flux = 0.06
+drainage_connectivity = 0.5
+
+[solution_fields.soil__depth]
+units = 'm'
+initial = 0.0
+
+# For most use cases, these fields should be specified by input files.
+[solution_fields.glacier__sliding_velocity]
+units = 'm / a'
+initial = 100.0
+
+[solution_fields.glacier__effective_pressure]
+units = 'Pa'
+initial = 100e3
+
+[input_fields]
+# [input_fields.example]
+# units = 'm / a'
+# file = 'path/to/file'

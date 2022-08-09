@@ -22,32 +22,77 @@ Attributes:
 Methods:
     None
 """
+import numpy as np
+import toml
+from landlab import RasterModelGrid
+import rasterio as rio
 
 class BasalIceStratigrapher:
     """Tracks the evolution of basal sediment entrainment beneath a glacier."""
 
-    def __init__(self, grid, erosion_coefficient = 0.4e-4,
-                             erosion_exponent = 1,
-                             ):
+    def __init__(self, input_file):
         """Initializes the model with a Landlab grid object."""
-        self.grid = grid
+        with open(input_file) as f:
+            inputs = toml.loads(f.read())
 
-        if 'glacier__thickness' not in self.grid.at_node.keys():
-            raise ValueError("Missing glacier__thickness field at grid nodes.")
+        self.grid = RasterModelGrid(inputs['grid']['shape'], inputs['grid']['spacing'])
+        self.parameters = inputs['parameters']
 
-        if 'glacier__sliding_velocity' not in self.grid.at_link.keys():
-            raise ValueError("")
+        for key in inputs['solution_fields'].keys():
+            if key not in self.grid.at_node.keys():
+                self.grid.add_zeros(key, at = 'node', units = inputs['solution_fields'][key]['units'])
+                self.grid.at_node[key][:] = inputs['solution_fields'][key]['initial']
 
-        self.erosion_coefficient = erosion_coefficient
-        self.erosion_exponent = erosion_exponent
+        for key in inputs['input_fields'].keys():
+            if key not in self.grid.at_node.keys():
+                with rio.open(inputs['input_fields'][key], 'r') as f:
+                    data = f.read(1)
+
+                    if data.shape == self.grid.shape:
+                        self.grid.add_field(key, data, at = 'node', units = inputs['solution_fields'][key]['units'])
+
+                    else:
+                        raise ValueError("Shape of " + str(key) + " data does not match grid shape.")
 
     def calc_erosion_rate(self):
         """Calculates the erosion rate as a function of sliding velocity."""
+        required = ['soil__depth', 'glacier__sliding_velocity']
 
+        for field in required:
+            if field not in self.grid.at_node.keys():
+                raise ValueError("Missing " + str(field) + " at nodes.")
+
+        if 'erosion__rate' not in self.grid.at_node.keys():
+            self.grid.add_zeros('erosion__rate', at = 'node')
+
+        Ks = self.parameters['erosion_coefficient']
+        m = self.parameters['erosion_exponent']
+        ub = self.grid.at_node['glacier__sliding_velocity'][:]
+
+        self.grid.at_node['erosion__rate'][:] = (
+            Ks * np.abs(ub)**m
+        )
 
     def calc_melt_rate(self):
         """Calculates the basal melt rate as a function of shear stress and heat fluxes."""
-        pass
+        required = ['glacier__sliding_velocity', 'glacier__effective_pressure']
+
+        for field in required:
+            if field not in self.grid.at_node.keys():
+                raise ValueError("Missing " + str(field) + " at nodes.")
+
+        if 'subglacial_melt__rate' not in self.grid.at_node.keys():
+            self.grid.add_zeros('subglacial_melt__rate', at = 'node')
+
+        rho = self.parameters['ice_density']
+        L = self.parameters['ice_latent_heat']
+        ub = self.grid.at_node['glacier__sliding_velocity'][:]
+        N = self.grid.at_node['glacier__effective_pressure'][:]
+        mu = self.parameters['friction_coefficient']
+        frictional = ub * mu * N
+        geothermal = self.parameters['geothermal_heat_flux']
+
+        self.grid.at_node['subglacial_melt__rate'][:] = (frictional + geothermal) / (rho * L)
 
     def calc_fringe_growth_rate(self):
         """Calculates the growth rate of frozen fringe as a function of melt and pressure."""
