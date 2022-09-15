@@ -99,9 +99,62 @@ def test_calc_fringe_growth():
                                                                           2.173e-5, 2.173e-5, 2.173e-5, 2.173e-5,
                                                                           2.173e-5, 2.173e-5, 2.173e-5, 2.173e-5])
 
-def test_advective_deformation():
-    """Test advective deformation calculation."""
+def test_calc_regelation_rate():
+    """Test the particle regelation rate calculations."""
     basis = BasalIceStratigrapher(config)
-    basis.calc_advective_deformation()
+    basis.grid.at_node['frozen_fringe__thickness'][:] += 1.0
+    basis.grid.at_node['dispersed_layer__thickness'][:] += 1.0
 
-    pass
+    basis.calc_fringe_growth_rate()
+    basis.calc_regelation_rate()
+
+    assert_array_almost_equal(basis.grid.at_node['dispersed_layer__growth_rate'][basis.grid.core_nodes],
+                              [2.208e-10, 2.208e-10, 2.208e-10, 2.208e-10], 12)
+
+def test_calc_advection():
+    """Test advection and deformation calculations."""
+    basis = BasalIceStratigrapher(config)
+    basis.grid.at_node['dispersed_layer__thickness'][:] += 0.5 * (basis.grid.node_x + basis.grid.node_y)
+    basis.grid.at_node['frozen_fringe__thickness'][:] += 1.0 * (basis.grid.node_x + basis.grid.node_y)
+
+    sliding_x = basis.grid.at_node['glacier__sliding_velocity'] * basis.grid.node_x**(1.25) * 1e-2
+    basis.grid.add_field('glacier__sliding_velocity_x', sliding_x, at = 'node')
+
+    sliding_y = basis.grid.at_node['glacier__sliding_velocity'] * basis.grid.node_y**(1.25) * 1e-2
+    basis.grid.add_field('glacier__sliding_velocity_y', sliding_y, at = 'node')
+
+    basis.calc_melt_rate()
+    basis.calc_fringe_growth_rate()
+    basis.calc_regelation_rate()
+    basis.calc_advection()
+
+    assert_array_almost_equal(basis.grid.at_node['dispersed_layer__advection'][basis.grid.core_nodes],
+                              [5.584e-7, 9.432e-7, 9.432e-7, 1.328e-6], 10)
+
+    assert_array_almost_equal(basis.grid.at_node['frozen_fringe__advection'][basis.grid.core_nodes],
+                              [1.117e-6, 1.886e-6, 1.886e-6, 2.656e-6], 9)
+
+def test_calc_dynamic_thinning():
+    """Test the dynamic thickening and/or thinning calculations."""
+    basis = BasalIceStratigrapher(config)
+    basis.grid.at_node['dispersed_layer__thickness'][:] += 0.5 * (basis.grid.node_x + basis.grid.node_y)
+    basis.grid.at_node['frozen_fringe__thickness'][:] += 1.0 * (basis.grid.node_x + basis.grid.node_y)
+
+    sliding_x = basis.grid.at_node['glacier__sliding_velocity'] * basis.grid.node_x**(1.25) * 1e-2
+    basis.grid.add_field('glacier__sliding_velocity_x', sliding_x, at = 'node')
+
+    sliding_y = basis.grid.at_node['glacier__sliding_velocity'] * basis.grid.node_y**(1.25) * 1e-2
+    basis.grid.add_field('glacier__sliding_velocity_y', sliding_y, at = 'node')
+
+    basis.calc_melt_rate()
+    basis.calc_fringe_growth_rate()
+    basis.calc_regelation_rate()
+    basis.calc_dynamic_thinning()
+
+    assert_array_almost_equal(basis.grid.at_node['glacier__velocity_divergence'][basis.grid.core_nodes] *
+                              basis.grid.at_node['frozen_fringe__thickness'][basis.grid.core_nodes],
+                              [2.656e-6, 4.461e-6, 4.461e-6, 6.585e-6], 9)
+
+    assert_array_almost_equal(basis.grid.at_node['glacier__velocity_divergence'][basis.grid.core_nodes] *
+                              basis.grid.at_node['dispersed_layer__thickness'][basis.grid.core_nodes],
+                              [1.328e-6, 2.230e-6, 2.230e-6, 3.292e-6], 9)

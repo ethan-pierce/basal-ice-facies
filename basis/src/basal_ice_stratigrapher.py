@@ -45,7 +45,7 @@ class BasalIceStratigrapher:
 
         for key in inputs['input_fields'].keys():
             if key not in self.grid.at_node.keys():
-                with rio.open(inputs['input_fields'][key], 'r') as f:
+                with rio.open(inputs['input_fields'][key][file], 'r') as f:
                     data = f.read(1)
 
                     if data.shape == self.grid.shape:
@@ -53,6 +53,8 @@ class BasalIceStratigrapher:
 
                     else:
                         raise ValueError("Shape of " + str(key) + " data does not match grid shape.")
+
+        self.calc_thermal_gradients()
 
     def calc_erosion_rate(self):
         """Calculates the erosion rate as a function of sliding velocity."""
@@ -148,20 +150,6 @@ class BasalIceStratigrapher:
 
         self.grid.at_node['transition_temperature'] = G * hf + Tf
 
-    def calc_regelation_rate(self):
-        """Calculates the vertical regelation rate and change in depth-averaged sediment concentration."""
-        required = []
-
-        for field in required:
-            if field not in self.grid.at_node.keys():
-                raise ValueError("Missing " + str(field) + " at nodes.")
-
-        if 'particle__vertical_velocity' not in self.grid.at_node.keys():
-            self.grid.add_zeros('particle__vertical_velocity', at = 'node')
-
-        if 'cluster__vertical_velocity' not in self.grid.at_node.keys():
-            self.grid.add_zeros('cluster__vertical_velocity', at = 'node')
-
     def calc_fringe_growth_rate(self):
         """Calculates the growth rate of frozen fringe as a function of melt and pressure."""
         required = ['glacier__effective_pressure']
@@ -181,8 +169,6 @@ class BasalIceStratigrapher:
 
         if 'flow__resistance' not in self.grid.at_node.keys():
             self.grid.add_zeros('flow__resistance', at = 'node')
-
-        self.calc_thermal_gradients()
 
         G = self.grid.at_node['fringe__thermal_gradient'][:]
         h = self.grid.at_node['frozen_fringe__thickness'][:]
@@ -225,22 +211,139 @@ class BasalIceStratigrapher:
 
         self.grid.at_node['fringe__growth_rate'] = (-m - V) / (phi * S)
 
-    def calc_advective_deformation(self):
-        """Calculates thickening or thinning of basal ice as a function of the velocity field."""
-        required = ['glacier__sliding_velocity']
+    def calc_regelation_rate(self):
+        """Calculates the vertical regelation rate and change in depth-averaged sediment concentration."""
+        required = ['fringe__undercooling']
 
         for field in required:
             if field not in self.grid.at_node.keys():
                 raise ValueError("Missing " + str(field) + " at nodes.")
 
-        if 'advective__deformation' not in self.grid.at_node.keys():
-            self.grid.add_zeros('advective__deformation', at = 'node')
+        if 'dispersed_layer__growth_rate' not in self.grid.at_node.keys():
+            self.grid.add_zeros('dispersed_layer__growth_rate', at = 'node')
 
-        H = self.grid.at_node['glacier__thickness'][:]
-        ub = self.grid.at_node['glacier__sliding_velocity'][:]
-        grad_u = self.grid.calc_grad_at_link(ub)
-        div_u = self.grid.calc_flux_div_at_node(grad_u)
+        if 'dispersed_layer__thickness' not in self.grid.at_node.keys():
+            self.grid.add_zeros('dispersed_layer__thickness', at = 'node')
+
+        pf = self.parameters['entry_pressure']
+        Tm = self.parameters['melt_temperature']
+        Tf = self.parameters['fringe_base_temperature']
+        rho = self.parameters['ice_density']
+        g = self.parameters['gravity']
+        L = self.parameters['ice_latent_heat']
+        r = self.parameters['particle_radius']
+        z0 = self.parameters['critical_depth']
+        gamma = self.parameters['ice_clapeyron_slope']
+        theta = self.grid.at_node['fringe__undercooling'][:]
+
+        # Meyer et al. 2018, eq (12)
+        temp_at_top_of_fringe = Tm - (Tm - Tf) * theta
+
+        # The temperature gradient depends on the supercooling at the top of the fringe
+        G = (Tm - temp_at_top_of_fringe) / z0
+
+        # Kozeny-Carmen equation for permeability
+        phi = self.parameters['cluster_volume_fraction']
+        K = (r**2 * (1 - phi)**3) / (45 * phi**2)
+
+        mu = self.parameters['water_viscosity']
+        ki = self.parameters['ice_thermal_conductivity']
+        kp = self.parameters['sediment_thermal_conductivity']
+        coeff = (K * rho * L) / (mu * Tm * (2 * ki + kp))
+
+        # The dispersed layer thickness grows with the velocity of the fastest particles
+        self.grid.at_node['dispersed_layer__growth_rate'][:] = (coeff * 3 * ki) / (1 + coeff * rho * L) * G
+
+    def calc_advection(self):
+        """Calculates transport of basal ice layers by horizontal advection. This scheme is likely to be unstable."""
+        required = ['glacier__sliding_velocity_x', 'glacier__sliding_velocity_y',
+                    'fringe__growth_rate', 'frozen_fringe__thickness',
+                    'dispersed_layer__growth_rate', 'dispersed_layer__thickness']
+
+        for field in required:
+            if field not in self.grid.at_node.keys():
+                raise ValueError("Missing " + str(field) + " at nodes.")
+
+        if 'dispersed_layer__advection' not in self.grid.at_node.keys():
+            self.grid.add_zeros('dispersed_layer__advection', at = 'node')
+
+        if 'frozen_fringe__advection' not in self.grid.at_node.keys():
+            self.grid.add_zeros('frozen_fringe__advection', at = 'node')
+
+        hd = self.grid.at_node['dispersed_layer__thickness'][:]
+        hf = self.grid.at_node['frozen_fringe__thickness'][:]
+        u = self.grid.at_node['glacier__sliding_velocity_x'][:]
+        v = self.grid.at_node['glacier__sliding_velocity_y'][:]
+
+        grad_hd = self.grid.calc_grad_at_link(hd)
+        hd_x = self.grid.map_mean_of_horizontal_active_links_to_node(grad_hd)
+        hd_y = self.grid.map_mean_of_vertical_active_links_to_node(grad_hd)
+        advect_hd = u * hd_x + v * hd_y
+        self.grid.at_node['dispersed_layer__advection'][:] = advect_hd
+        self.grid.at_node['dispersed_layer__growth_rate'][:] -= advect_hd
+
+        grad_hf = self.grid.calc_grad_at_link(hf)
+        hf_x = self.grid.map_mean_of_horizontal_active_links_to_node(grad_hf)
+        hf_y = self.grid.map_mean_of_vertical_active_links_to_node(grad_hf)
+        advect_hf = u * hf_x + v * hf_y
+        self.grid.at_node['frozen_fringe__advection'][:] = advect_hf
+        self.grid.at_node['fringe__growth_rate'][:] -= advect_hf
+
+    def calc_dynamic_thinning(self):
+        """Calculates the dynamic thickening or thinning of basal ice layers."""
+        required = ['glacier__sliding_velocity_x', 'glacier__sliding_velocity_y']
+
+        for field in required:
+            if field not in self.grid.at_node.keys():
+                raise ValueError("Missing " + str(field) + " at nodes.")
+
+        if 'glacier__velocity_divergence' not in self.grid.at_node.keys():
+            u = self.grid.at_node['glacier__sliding_velocity_x'][:]
+            v = self.grid.at_node['glacier__sliding_velocity_y'][:]
+
+            grad_u = self.grid.calc_grad_at_link(u)
+            grad_v = self.grid.calc_grad_at_link(v)
+
+            du_dx = self.grid.map_mean_of_horizontal_active_links_to_node(grad_u)
+            dv_dy = self.grid.map_mean_of_vertical_active_links_to_node(grad_v)
+
+            self.grid.add_field('glacier__velocity_divergence', du_dx + dv_dy, at = 'node')
+
+        self.grid.at_node['fringe__growth_rate'][:] -= (
+            self.grid.at_node['frozen_fringe__thickness'][:] * self.grid.at_node['glacier__velocity_divergence'][:]
+        )
+
+        self.grid.at_node['dispersed_layer__growth_rate'][:] -= (
+            self.grid.at_node['dispersed_layer__thickness'][:] * self.grid.at_node['glacier__velocity_divergence']
+        )
 
     def run_one_step(self, dt):
-        """Advances the model forward one time step."""
-        pass
+        """Advances the model forward one time step of size dt (seconds)."""
+
+        # TODO fix to include updated advection scheme
+
+        self.calc_erosion_rate()
+        self.grid.at_node['soil__depth'][:] += self.grid.at_node['erosion__rate'][:] * dt
+
+        self.calc_melt_rate()
+        self.calc_thermal_gradients()
+        self.calc_fringe_growth_rate()
+        self.calc_regelation_rate()
+        self.calc_advection()
+
+        expected_fringe_growth = self.grid.at_node['fringe__growth_rate'][:] * dt
+
+        self.grid.at_node['frozen_fringe__thickness'][:] = np.where(
+            expected_fringe_growth <= self.grid.at_node['soil__depth'][:],
+            self.grid.at_node['frozen_fringe__thickness'][:] + expected_fringe_growth,
+            self.grid.at_node['frozen_fringe__thickness'][:] + self.grid.at_node['soil__depth'][:]
+        )
+
+        self.grid.at_node['dispersed_layer__thickness'][:] += (
+            self.grid.at_node['dispersed_layer__growth_rate'] * dt
+        )
+
+        self.grid.at_node['frozen_fringe__thickness'][:] -= (
+            self.grid.at_node['dispersed_layer__growth_rate'][:] * dt *
+            self.parameters['escape_coefficient'] * self.parameters['frozen_fringe_porosity']
+        )

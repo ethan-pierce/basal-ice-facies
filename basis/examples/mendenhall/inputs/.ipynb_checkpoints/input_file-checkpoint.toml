@@ -1,8 +1,8 @@
 name = 'tests'
 
 [grid]
-shape = [4, 4]
-spacing = 10.0
+shape = [329, 275]
+spacing = 50.0
 
 [parameters]
 erosion_coefficient = 4e-4
@@ -76,7 +76,8 @@ initial = 0.0
 units = 'm / s'
 initial = 0.0
 
-# For most use cases, these fields should be specified by input files.
+# For most use cases, these fields should be specified by input files,
+# or added as fields to the grid manually during setup.
 [solution_fields.glacier__thickness]
 units = 'm'
 initial = 300
@@ -90,6 +91,3 @@ units = 'Pa'
 initial = 100e3
 
 [input_fields]
-# [input_fields.example]
-# units = 'm / a'
-# file = 'path/to/file'
