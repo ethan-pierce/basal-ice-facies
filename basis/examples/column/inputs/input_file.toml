@@ -1,8 +1,8 @@
-name = 'tests'
+name = 'columns'
 
 [grid]
-shape = [4, 4]
-spacing = 10.0
+shape = [3, 3]
+spacing = 1.0
 
 [parameters]
 erosion_coefficient = 4e-4
@@ -29,7 +29,6 @@ till_grain_radius = 4e-5
 particle_radius = 1e-6
 critical_depth = 10
 cluster_volume_fraction = 0.64
-escape_coefficient = 0.5
 
 [solution_fields.soil__depth]
 units = 'm'
@@ -67,28 +66,22 @@ initial = 1e-3
 units = 'm / s'
 initial = 0.0
 
-[solution_fields.particle__velocity]
-units = 'm / s'
-initial = 0.0
-
-[solution_fields.cluster__velocity]
-units = 'm / s'
-initial = 0.0
-
-# For most use cases, these fields should be specified by input files.
-[solution_fields.glacier__thickness]
+# For realistic use cases, these fields should be specified by input files,
+# or added as fields to the grid manually during setup.
+[static_inputs.glacier__thickness]
 units = 'm'
-initial = 300
+value = 110
 
-[solution_fields.glacier__sliding_velocity]
-units = 'm / s'
-initial = 3.14e-6
-
-[solution_fields.glacier__effective_pressure]
+[static_inputs.glacier__effective_pressure]
 units = 'Pa'
-initial = 100e3
+value = 100e3
+
+[static_inputs.glacier__sliding_velocity_x]
+units = 'm / s'
+value = 1e-6
+
+[static_inputs.glacier__sliding_velocity_y]
+units = 'm / s'
+value = 1e-6
 
 [input_fields]
-# [input_fields.example]
-# units = 'm / a'
-# file = 'path/to/file'
